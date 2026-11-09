@@ -1,3 +1,5 @@
+# Glimpse
+
 Build me a re-usable system I can use to totally automate this process from end-to-end with everything you have suggested. This will be a system that creates systems. Start by writing a master PRD with a checklist using the info from this chat and add the following info to it. Let's iteratively review and refine it until you and I are both satisfied that it is ready for implementation. The actual implementation will be split into 2 or more fully independent systems, like what we did with andexor-net-website for the front-end and andexor-net-website-contact-us for the back-end.
 
 The base name of the system is to be called "Andexor Glimpse". The name is based on a concept taken from the movie [The Family Man](https://www.imdb.com/title/tt0218967/). The ID to use for repo names, app names, etc. should start with "andexor-glimpse", followed by a dash and then a descriptive name like "fe" for front-end, "be" for back-end, etc. Or we could go with "ui" and "server". Choose what makes the most sense and remember it for future multi-tiered projects like this. We need to establish some kind of standard naming convention. Note that:
@@ -13,8 +15,6 @@ The base name of the system is to be called "Andexor Glimpse". The name is based
    - Expect the possibility that we might extend this in the future to add more back-end services to enrich the process of creating and managing glimpses.
 
 Split the master PRD into separate units, one for each project you create for the apps that will manage and run this system, keeping the master PRD to govern them all.
-
-# Glimpse
 
 A glimpse is a preview of what a website could look like. It is given to a prospect who either currently has no website or has one that needs to be upgraded and modernized with a new look, more security, better performance, better accessibility, or uses AI to help their customers buy from them.
 

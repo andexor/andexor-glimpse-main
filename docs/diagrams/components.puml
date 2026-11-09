@@ -1,0 +1,76 @@
+@startuml components
+title Andexor Glimpse — components and data ownership
+
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam linetype ortho
+
+actor "Ed" as Ed
+actor "Prospect" as Prospect
+
+cloud "Cloudflare edge" {
+  component "Cloudflare Access\n(Zero Trust: andexor)" as Access
+  note right of Access
+    One application per hostname\n(UI and its /api/* share it).
+    Admin hosts: Cloudflare IdP (Ed).
+    Portal + glimpse hosts: email OTP.
+  end note
+}
+
+package "Admin tier (public repos)" {
+  component "admin-ui\nNext.js CSR\nadmin.glimpse.andexor.net" as AdminUI
+  component "admin-api\nFastAPI / Python Worker\nadmin.glimpse.andexor.net/api/*" as AdminAPI
+  database "system D1\n(system of record)" as SystemDB
+}
+
+package "Prospect tier (public repos)" {
+  component "portal-ui\nNext.js CSR\nportal.glimpse.andexor.net" as PortalUI
+  component "portal-api\nFastAPI / Python Worker\nportal.glimpse.andexor.net/api/*" as PortalAPI
+  database "portal D1\n(feedback: decision_log, comment)" as PortalDB
+}
+
+package "Glimpse tier (private repos, one pair per glimpse)" {
+  component "<id>-ui\nNext.js CSR\n<id>.glimpse.andexor.net" as GlimpseUI
+  component "<id>-api\nFastAPI / Python Worker\n<id>.glimpse.andexor.net/api/*" as GlimpseAPI
+  database "glimpse D1\n(meta + design tables)" as GlimpseDB
+}
+
+cloud "External services" {
+  component "GitHub API\n(andexor org)" as GitHub
+  component "Cloudflare API\nWorkers, D1, Access, Routes" as CFAPI
+  component "Secrets Store" as Secrets
+  component "Workers Logs / Traces" as Obs
+}
+
+Ed --> Access
+Prospect --> Access
+Access --> AdminUI
+Access --> PortalUI
+Access --> GlimpseUI
+
+AdminUI --> AdminAPI : REST + SSE
+PortalUI --> PortalAPI : REST
+GlimpseUI --> GlimpseAPI : REST
+
+AdminAPI --> SystemDB : binding (sole owner)
+PortalAPI --> PortalDB : binding (sole owner)
+GlimpseAPI --> GlimpseDB : binding (sole owner)
+
+AdminAPI -right-> PortalAPI : Service Binding\nupsert_glimpse(5 fields)\nget_feedback(glimpse_id)
+PortalAPI -left-> AdminAPI : Service Binding\nextend(glimpse_id)\nrecord_decision(glimpse_id, action)
+
+AdminAPI --> GitHub : create repos, settings,\nrulesets, actions, star, watch
+AdminAPI --> CFAPI : Workers, Routes, D1,\nAccess apps + policies
+AdminAPI ..> Secrets : bindings
+PortalAPI ..> Secrets : bindings
+AdminAPI ..> Obs
+PortalAPI ..> Obs
+GlimpseAPI ..> Obs
+
+legend bottom
+  Solid arrow = runtime call. Dotted = platform binding.
+  No database is shared or replicated; four Service Binding
+  methods are the only coupling between admin and portal tiers.
+endlegend
+@enduml

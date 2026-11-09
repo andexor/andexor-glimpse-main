@@ -1,0 +1,52 @@
+@startuml seq-provisioning
+title Provisioning a glimpse (Create → DRAFT → PENDING)
+
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam sequenceMessageAlign center
+autonumber
+
+actor Ed
+participant "admin-ui" as UI
+participant "admin-api" as API
+database "system D1" as DB
+participant "GitHub API" as GH
+participant "Cloudflare API" as CF
+participant "portal-api" as Portal
+
+Ed -> UI : Create glimpse\n(company, email, [owner, phone])
+UI -> API : POST /glimpses
+API -> API : generate id (20-char base32, lowercase)
+API -> DB : INSERT prospect (upsert by email)\nINSERT glimpse state=PROVISIONING\nINSERT provisioning_run kind=create
+API --> UI : 202 Accepted { glimpse_id, run_id }
+UI -> API : GET /runs/{run_id}/events  (SSE)
+activate UI
+
+group Steps are idempotent: each checks for its resource before creating it
+  API -> GH : create repo <id>-ui from andexor-base-template (private)
+  API -> GH : create repo <id>-api from andexor-base-template (private)
+  API -> GH : apply settings, rulesets, security,\nactions workflows, Spec Kit scaffold, star, watch
+  API --> UI : SSE step github.* succeeded
+  API -> CF : create D1 database <id>-api
+  API -> CF : run glimpse 0001_init.sql (meta)
+  API -> CF : deploy Workers <id>-ui, <id>-api\n(Hello World, observability on)
+  API -> CF : add Routes\n<id>.glimpse.andexor.net/api/* -> <id>-api\n<id>.glimpse.andexor.net/* -> <id>-ui
+  API -> CF : create one Access app for <id>.glimpse.andexor.net\n(policy: Ed only until notified)
+  API -> CF : Transform Rule already covers *.glimpse (noindex)
+  API --> UI : SSE step cloudflare.* succeeded
+end
+
+API -> DB : UPDATE glimpse state=DRAFT, hostname, ids\nINSERT glimpse_event PROVISIONING→DRAFT\nUPDATE provisioning_run succeeded
+API --> UI : SSE run SUCCEEDED
+deactivate UI
+UI --> Ed : Glimpse is in DRAFT;\nreplace Hello World, then Notify
+
+== Later: Ed clicks "Notify prospect" ==
+Ed -> UI : Notify prospect
+UI -> API : POST /glimpses/{id}/notify
+API -> CF : add prospect email to the Access policy
+API -> DB : state=PENDING, notified_at, activated_at,\nexpires_at=+7d, delete_at=+30d\nINSERT scheduled_job EXPIRE, DELETE\nINSERT glimpse_event DRAFT→PENDING
+API -> Portal : upsert_glimpse(id, company, email,\nhostname, expires_at, active=true)
+API -> DB : INSERT notification prospect_invite (stub)
+API --> UI : 200 { state: PENDING, expires_at, delete_at }
+@enduml

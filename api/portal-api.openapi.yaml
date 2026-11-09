@@ -1,0 +1,304 @@
+openapi: 3.1.0
+info:
+  title: Andexor Glimpse — portal-api
+  version: 0.1.0
+  summary: Prospect-facing API used only by portal-ui.
+  description: |
+    Runs on Cloudflare Python Workers (FastAPI) at portal.glimpse.andexor.net/api/*
+    (a Worker Route on the same hostname as portal-ui, so one Access application
+    covers both).
+    Every request arrives through Cloudflare Access (email One-time PIN). The API
+    verifies the `Cf-Access-Jwt-Assertion` header, reads the email claim, and
+    resolves the prospect server-side. **No endpoint accepts a prospect_id or
+    glimpse_id that the caller is not entitled to**: path glimpse_ids are checked
+    against the signed-in prospect's glimpses and return 404 otherwise.
+
+    portal-api owns the portal database (feedback). It never reads the system
+    database. Its only calls into admin-api are `extend` and `record_decision`.
+    All finite-value fields are UPPERCASE codes from the portal database's srt.
+
+    Hand-drafted from the PRD; replaced by FastAPI's generated spec once code exists.
+servers:
+  - url: https://portal.glimpse.andexor.net/api
+security:
+  - cloudflareAccess: []
+tags:
+  - name: me
+  - name: glimpses
+  - name: health
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Liveness and database reachability
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, database]
+                properties:
+                  status: { type: string, enum: [ok] }
+                  database: { type: string, enum: [ok, error] }
+
+  /me:
+    get:
+      tags: [me]
+      summary: The signed-in prospect
+      responses:
+        "200":
+          description: Prospect
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Prospect" }
+        "403":
+          description: Email passed Access but no prospect record exists (should not happen; alert Ed)
+
+  /me/glimpses:
+    get:
+      tags: [glimpses]
+      summary: The prospect's glimpses with current decision and expiry
+      responses:
+        "200":
+          description: Glimpses, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PortalGlimpse" }
+
+  /glimpses/{glimpse_id}:
+    parameters: [ { $ref: "#/components/parameters/GlimpseId" } ]
+    get:
+      tags: [glimpses]
+      summary: One glimpse with its full decision log and comments
+      responses:
+        "200":
+          description: Glimpse
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PortalGlimpseDetail" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /glimpses/{glimpse_id}/decision:
+    post:
+      tags: [glimpses]
+      summary: Approve or decline (appends to decision_log; calls admin-api.record_decision; alerts Ed)
+      parameters: [ { $ref: "#/components/parameters/GlimpseId" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [APPROVED, DECLINED] }
+      responses:
+        "201":
+          description: Recorded
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DecisionLogEntry" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Glimpse is not active (EXPIRED or deleted)
+
+  /glimpses/{glimpse_id}/comments:
+    parameters: [ { $ref: "#/components/parameters/GlimpseId" } ]
+    get:
+      tags: [glimpses]
+      summary: Comments, oldest first
+      responses:
+        "200":
+          description: Comments
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Comment" }
+    post:
+      tags: [glimpses]
+      summary: Add a comment (alerts Ed)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string, minLength: 1, maxLength: 10000 }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Comment" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /glimpses/{glimpse_id}/extend:
+    post:
+      tags: [glimpses]
+      summary: '"I need more time" — self-service extension, no approval'
+      description: |
+        Appends a DELAYED row to decision_log, calls admin-api.extend over the
+        Service Binding, stores the returned expires_at, and sends Ed an alert
+        and the prospect a confirmation (stubs). Allowed while the glimpse is
+        PENDING, APPROVED, DECLINED, DELAYED, or EXPIRED, and not deleted.
+      parameters: [ { $ref: "#/components/parameters/GlimpseId" } ]
+      responses:
+        "200":
+          description: Extended
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [expires_at]
+                properties:
+                  expires_at: { $ref: "#/components/schemas/Timestamp" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Glimpse is deleted and cannot be extended
+        "502":
+          description: admin-api did not accept the extension; nothing was recorded
+
+components:
+  securitySchemes:
+    cloudflareAccess:
+      type: apiKey
+      in: header
+      name: Cf-Access-Jwt-Assertion
+
+  parameters:
+    GlimpseId:
+      in: path
+      name: glimpse_id
+      required: true
+      schema: { $ref: "#/components/schemas/GlimpseIdValue" }
+
+  responses:
+    NotFound:
+      description: Not found, or not this prospect's glimpse (indistinguishable by design)
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error, request_id]
+            properties:
+              error: { type: string }
+              request_id: { type: string }
+
+  schemas:
+    GlimpseIdValue:
+      type: string
+      pattern: "^[a-z2-7]{20}$"
+    Timestamp:
+      type: string
+      format: date-time
+    Prospect:
+      type: object
+      required: [id, company_name, email]
+      properties:
+        id: { type: string }
+        company_name: { type: string }
+        email: { type: string, format: email }
+    PortalGlimpse:
+      type: object
+      required: [id, company_name, hostname, url, expires_at, active, deleted, can_decide, can_extend]
+      properties:
+        id: { $ref: "#/components/schemas/GlimpseIdValue" }
+        company_name: { type: string }
+        hostname: { type: string }
+        url: { type: string, format: uri, description: https://<hostname> }
+        expires_at: { $ref: "#/components/schemas/Timestamp" }
+        active:
+          type: boolean
+          description: false once expired; the UI disables the glimpse link
+        deleted: { type: boolean }
+        can_decide:
+          type: boolean
+          description: active and not deleted
+        can_extend:
+          type: boolean
+          description: not deleted (active or EXPIRED both qualify)
+        current_decision:
+          oneOf:
+            - { type: "null" }
+            - type: object
+              required: [action, decided_at]
+              properties:
+                action: { type: string, enum: [APPROVED, DECLINED] }
+                decided_at: { $ref: "#/components/schemas/Timestamp" }
+        extension_count: { type: integer, minimum: 0 }
+    PortalGlimpseDetail:
+      allOf:
+        - $ref: "#/components/schemas/PortalGlimpse"
+        - type: object
+          required: [decision_log, comments]
+          properties:
+            decision_log:
+              type: array
+              items: { $ref: "#/components/schemas/DecisionLogEntry" }
+            comments:
+              type: array
+              items: { $ref: "#/components/schemas/Comment" }
+    DecisionLogEntry:
+      type: object
+      required: [id, action, occurred_at]
+      properties:
+        id: { type: integer }
+        action: { type: string, enum: [APPROVED, DECLINED, DELAYED], description: srt DECISION_ACTION }
+        occurred_at: { $ref: "#/components/schemas/Timestamp" }
+        new_expires_at: { oneOf: [ { $ref: "#/components/schemas/Timestamp" }, { type: "null" } ] }
+    Comment:
+      type: object
+      required: [id, author, body, created_at]
+      properties:
+        id: { type: integer }
+        author: { type: string, enum: [PROSPECT, ED], description: srt AUTHOR }
+        body: { type: string }
+        created_at: { $ref: "#/components/schemas/Timestamp" }
+
+x-service-bindings:
+  description: |
+    Worker-to-Worker RPC over Cloudflare Service Bindings; not HTTP routes.
+    portal-api EXPOSES two methods, both called only by admin-api, and CALLS two
+    on admin-api. Four methods in total.
+  exposes:
+    upsert_glimpse:
+      called_by: admin-api
+      when: notify, reactivate, extend, expire, delete
+      input:
+        glimpse_id: GlimpseIdValue
+        prospect_id: string          # same uuid as system db
+        company_name: string
+        prospect_email: string       # lowercase
+        hostname: string
+        expires_at: Timestamp
+        active: boolean
+        deleted: boolean
+      effect: |
+        Upsert prospect (by id) and glimpse (by id) in the portal database.
+        Idempotent: repeating the same payload is a no-op.
+      output:
+        ok: boolean
+    get_feedback:
+      called_by: admin-api
+      input:
+        glimpse_id: GlimpseIdValue
+      output:
+        decisions: DecisionLogEntry[]   # full log incl. DELAYED rows, oldest first
+        comments: Comment[]
+        current_decision: "{ action, decided_at } or null"
+  calls:
+    admin-api.extend:
+      input: { glimpse_id: GlimpseIdValue }
+      output: { state: string, expires_at: Timestamp, delete_at: Timestamp }
+    admin-api.record_decision:
+      input: { glimpse_id: GlimpseIdValue, action: "APPROVED | DECLINED", occurred_at: Timestamp }
+      output: { state: string }
