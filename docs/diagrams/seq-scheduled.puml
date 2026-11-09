@@ -1,0 +1,50 @@
+@startuml seq-scheduled
+title Scheduled expire and delete (Cron Trigger on admin-api)
+
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam sequenceMessageAlign center
+autonumber
+
+participant "Cron Trigger\n(hourly)" as Cron
+participant "admin-api\nscheduled()" as API
+database "system D1" as DB
+participant "Cloudflare API" as CF
+participant "GitHub API" as GH
+participant "portal-api" as Portal
+actor Ed
+
+Cron -> API : scheduled event
+API -> DB : SELECT scheduled_job\nWHERE status='PENDING' AND run_at <= now\nORDER BY run_at
+
+loop each due job
+  alt kind = EXPIRE
+    API -> DB : INSERT provisioning_run kind=EXPIRE
+    API -> CF : remove prospect email from\nthe glimpse's Access policy
+    API -> Portal : upsert_glimpse(active=false)   [Service Binding]
+    API -> DB : UPDATE glimpse state=EXPIRED\nINSERT glimpse_event <prev>→EXPIRED (actor=CRON)\nUPDATE scheduled_job status=RAN
+    API -> DB : INSERT notification ed lifecycle_notice (stub, optional)
+  else kind = DELETE
+    API -> DB : INSERT provisioning_run kind=DELETE
+    API -> CF : delete Routes, Access app,\nWorkers <id>-ui and <id>-api, D1 <id>-api
+    API -> GH : delete repos <id>-ui and <id>-api
+    API -> Portal : upsert_glimpse(deleted=true, active=false)   [Service Binding]
+    API -> DB : UPDATE glimpse state=DELETED, deleted_at\nINSERT glimpse_event EXPIRED→DELETED (actor=CRON)\nUPDATE scheduled_job status=RAN
+  end
+  note right of API
+    Every step checks for its resource first,
+    so a job interrupted mid-way is safe to
+    re-run on the next tick. A failed step
+    marks the job FAILED and alerts Ed.
+  end note
+end
+
+API --> Cron : done
+
+== Reactivate from admin-ui (Ed) ==
+Ed -> API : POST /api/glimpses/{id}/reactivate
+API -> DB : cancel pending delete job;\nactivated_at=now, expires_at=+7d, delete_at=+30d;\nINSERT new EXPIRE + DELETE jobs; state=PENDING\nINSERT glimpse_event EXPIRED→PENDING (actor=ED)
+API -> CF : re-add prospect email to the Access policy
+API -> Portal : upsert_glimpse(expires_at, active=true)
+API --> Ed : 200 { expires_at, delete_at }
+@enduml

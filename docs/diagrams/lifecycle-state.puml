@@ -1,0 +1,57 @@
+@startuml lifecycle-state
+title Glimpse lifecycle (PRD section 5) — states are srt GLIMPSE_STATE codes
+
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam state {
+  BackgroundColor White
+  BorderColor #444444
+}
+
+[*] --> PROVISIONING : Ed submits\ncompany name + prospect email
+
+PROVISIONING --> DRAFT : all steps succeeded\n(repos, Workers, D1, Routes,\nAccess app, Hello World deployed)
+PROVISIONING --> FAILED : a step failed\n(partial resources flagged)
+FAILED --> PROVISIONING : Ed resumes\n(idempotent steps)
+
+DRAFT --> PENDING : Ed clicks "Notify prospect"\nnotified_at = activated_at = now\nexpires_at = now + 7d\ndelete_at = now + 30d\nprospect email added to Access policy\nportal.upsert_glimpse(active = true)
+
+state "Prospect can view (active)" as Active {
+  PENDING --> APPROVED : prospect approves\n(portal: decision_log APPROVED\n-> admin.record_decision)
+  PENDING --> DECLINED : prospect declines
+  PENDING --> DELAYED : prospect "I need more time"\n(portal: decision_log DELAYED\n-> admin.extend; clocks reset)
+  APPROVED --> DECLINED : later decline
+  DECLINED --> APPROVED : later approve
+  APPROVED --> DELAYED : "I need more time"
+  DECLINED --> DELAYED : "I need more time"
+  DELAYED --> APPROVED : approve
+  DELAYED --> DECLINED : decline
+  DELAYED --> DELAYED : "I need more time" again\n(clocks reset each time)
+}
+
+Active --> EXPIRED : cron: EXPIRE job at expires_at\nprospect removed from Access policy\nportal.upsert_glimpse(active = false)\ncontent, Workers, repos untouched
+
+EXPIRED --> DELAYED : prospect "I need more time"\n(portal -> admin.extend)\nactivated_at = now, expires_at = +7d,\ndelete_at = +30d, Access restored
+EXPIRED --> PENDING : Ed Reactivate\n(same clock reset, Access restored)
+
+EXPIRED --> DELETED : cron: DELETE job at delete_at
+Active --> DELETED : Ed requests deletion\n(from APPROVED or DECLINED)
+EXPIRED --> DELETED : Ed requests deletion
+
+DELETED --> [*]
+
+note right of DELETED
+  Both private repos deleted; Workers, Routes,
+  D1, Access app removed;
+  portal.upsert_glimpse(deleted = true).
+  Terminal: a returning prospect gets a
+  new glimpse with a new id.
+end note
+
+note bottom of Active
+  The state is the prospect's latest action.
+  All four keep full prospect access until
+  expires_at; both clocks run from the most
+  recent activation (notify, reactivate, extend).
+end note
+@enduml

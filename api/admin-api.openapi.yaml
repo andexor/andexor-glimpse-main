@@ -1,0 +1,485 @@
+openapi: 3.1.0
+info:
+  title: Andexor Glimpse — admin-api
+  version: 0.1.0
+  summary: Provisioning and lifecycle API used only by admin-ui.
+  description: |
+    Runs on Cloudflare Python Workers (FastAPI) at admin.glimpse.andexor.net/api/*
+    (a Worker Route on the same hostname as admin-ui, so one Access application
+    covers both).
+    Every request arrives through Cloudflare Access (Cloudflare identity provider,
+    policy = Ed). The API trusts the `Cf-Access-Jwt-Assertion` header after
+    verifying it against the team's public keys; there is no other authentication.
+
+    Long operations return 202 with a run id and stream progress over
+    Server-Sent Events (SSE). All identifiers are lowercase. All finite-value
+    fields are UPPERCASE codes from the database's System Reference Table (srt).
+    All timestamps are ISO-8601 UTC.
+
+    This document is hand-drafted from the PRD; once code exists FastAPI generates
+    the canonical spec and this file is replaced by that output.
+servers:
+  - url: https://admin.glimpse.andexor.net/api
+security:
+  - cloudflareAccess: []
+tags:
+  - name: glimpses
+  - name: runs
+  - name: jobs
+  - name: health
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Liveness and database reachability
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+
+  /glimpses:
+    get:
+      tags: [glimpses]
+      summary: List glimpses for the dashboard
+      parameters:
+        - in: query
+          name: state
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/GlimpseState" }
+          style: form
+          explode: false
+        - in: query
+          name: q
+          description: Case-insensitive match on company name or email
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - in: query
+          name: cursor
+          schema: { type: string }
+      responses:
+        "200":
+          description: Page of glimpses
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/GlimpseSummary" }
+                  next_cursor: { type: [string, "null"] }
+    post:
+      tags: [glimpses]
+      summary: Create a glimpse (starts provisioning)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateGlimpseRequest" }
+      responses:
+        "202":
+          description: Provisioning started
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunAccepted" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409":
+          description: A non-deleted glimpse already exists for this company and email
+
+  /glimpses/{glimpse_id}:
+    parameters:
+      - $ref: "#/components/parameters/GlimpseId"
+    get:
+      tags: [glimpses]
+      summary: Glimpse detail including feedback fetched on demand from portal-api
+      responses:
+        "200":
+          description: Glimpse detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GlimpseDetail" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /glimpses/{glimpse_id}/notify:
+    post:
+      tags: [glimpses]
+      summary: DRAFT → PENDING. Adds prospect to the Access policy, schedules EXPIRE/DELETE, sends invite (stub).
+      parameters: [ { $ref: "#/components/parameters/GlimpseId" } ]
+      responses:
+        "200":
+          description: Now PENDING
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GlimpseSummary" }
+        "409":
+          description: Glimpse is not in DRAFT
+
+  /glimpses/{glimpse_id}/reactivate:
+    post:
+      tags: [glimpses]
+      summary: EXPIRED → PENDING. Resets both clocks from now.
+      parameters: [ { $ref: "#/components/parameters/GlimpseId" } ]
+      responses:
+        "200":
+          description: Reactivated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GlimpseSummary" }
+        "409":
+          description: Glimpse is not EXPIRED
+
+  /glimpses/{glimpse_id}/delete:
+    post:
+      tags: [glimpses]
+      summary: Request deletion now (allowed from APPROVED, DECLINED, DELAYED, EXPIRED)
+      parameters: [ { $ref: "#/components/parameters/GlimpseId" } ]
+      responses:
+        "202":
+          description: Deletion run started
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunAccepted" }
+        "409":
+          description: State does not permit deletion
+
+  /glimpses/{glimpse_id}/recreate:
+    post:
+      tags: [glimpses]
+      summary: Create a new glimpse for the same prospect (old one is left in its state)
+      parameters: [ { $ref: "#/components/parameters/GlimpseId" } ]
+      responses:
+        "202":
+          description: Provisioning started for the new glimpse
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunAccepted" }
+
+  /glimpses/{glimpse_id}/events:
+    get:
+      tags: [glimpses]
+      summary: Audit trail of state transitions
+      parameters: [ { $ref: "#/components/parameters/GlimpseId" } ]
+      responses:
+        "200":
+          description: Events, oldest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/GlimpseEvent" }
+
+  /runs/{run_id}:
+    get:
+      tags: [runs]
+      summary: Provisioning run with its steps
+      parameters: [ { $ref: "#/components/parameters/RunId" } ]
+      responses:
+        "200":
+          description: Run
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Run" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [runs]
+      summary: Resume a failed run (steps are idempotent)
+      parameters: [ { $ref: "#/components/parameters/RunId" } ]
+      responses:
+        "202":
+          description: Resumed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunAccepted" }
+        "409":
+          description: Run is not FAILED
+
+  /runs/{run_id}/events:
+    get:
+      tags: [runs]
+      summary: Server-Sent Events stream of step progress
+      description: |
+        `text/event-stream`. Events: `step` (a provisioning_step changed status),
+        `run` (the run finished). Each event's data is JSON and carries the
+        Workers `trace_id` for that step so Ed can jump to the trace. The stream
+        closes after the `run` event. Reconnect with `Last-Event-ID` to resume.
+      parameters: [ { $ref: "#/components/parameters/RunId" } ]
+      responses:
+        "200":
+          description: Event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                examples:
+                  - |
+                    id: 7
+                    event: step
+                    data: {"seq":7,"name":"cloudflare.d1.create","status":"SUCCEEDED","trace_id":"4f2a..."}
+
+                    id: 12
+                    event: run
+                    data: {"status":"SUCCEEDED","glimpse_id":"q7mx2k9pbd4ht6wz3nra","state":"DRAFT"}
+
+  /jobs:
+    get:
+      tags: [jobs]
+      summary: Scheduled jobs (dates for the UI; cron expression included for the database view)
+      parameters:
+        - in: query
+          name: status
+          schema: { $ref: "#/components/schemas/JobStatus" }
+        - in: query
+          name: glimpse_id
+          schema: { $ref: "#/components/schemas/GlimpseIdValue" }
+      responses:
+        "200":
+          description: Jobs
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ScheduledJob" }
+
+components:
+  securitySchemes:
+    cloudflareAccess:
+      type: apiKey
+      in: header
+      name: Cf-Access-Jwt-Assertion
+      description: JWT set by Cloudflare Access; verified against the team's certs.
+
+  parameters:
+    GlimpseId:
+      in: path
+      name: glimpse_id
+      required: true
+      schema: { $ref: "#/components/schemas/GlimpseIdValue" }
+    RunId:
+      in: path
+      name: run_id
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+
+  responses:
+    BadRequest:
+      description: Validation error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Uuid:
+      type: string
+      pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    GlimpseIdValue:
+      type: string
+      pattern: "^[a-z2-7]{20}$"
+      description: 20-character lowercase base32 (RFC 4648 alphabet, lowercase).
+    Timestamp:
+      type: string
+      format: date-time
+      description: ISO-8601 UTC
+    GlimpseState:
+      type: string
+      enum: [PROVISIONING, FAILED, DRAFT, PENDING, APPROVED, DECLINED, DELAYED, EXPIRED, DELETED]
+      description: srt domain GLIMPSE_STATE
+    JobStatus:
+      type: string
+      enum: [PENDING, RAN, CANCELLED, FAILED]
+      description: srt domain JOB_STATUS
+    Health:
+      type: object
+      required: [status, database]
+      properties:
+        status: { type: string, enum: [ok] }
+        database: { type: string, enum: [ok, error] }
+        version: { type: string }
+    Error:
+      type: object
+      required: [error, request_id]
+      properties:
+        error: { type: string }
+        detail: {}
+        request_id:
+          type: string
+          description: Echoed in UI error messages; matches the Workers trace.
+    CreateGlimpseRequest:
+      type: object
+      required: [company_name, email]
+      properties:
+        company_name: { type: string, minLength: 1, maxLength: 200 }
+        email:
+          type: string
+          format: email
+          description: Lowercased on receipt; becomes the Access OTP identity.
+        owner_name: { type: [string, "null"], maxLength: 200 }
+        phone:
+          type: [string, "null"]
+          pattern: "^\\+[1-9][0-9]{6,14}$"
+          description: E.164. Used only for SMS copies.
+    RunAccepted:
+      type: object
+      required: [glimpse_id, run_id, events_url]
+      properties:
+        glimpse_id: { $ref: "#/components/schemas/GlimpseIdValue" }
+        run_id: { $ref: "#/components/schemas/Uuid" }
+        events_url: { type: string, format: uri }
+    GlimpseSummary:
+      type: object
+      required: [id, company_name, email, state, hostname, created_at, extension_count]
+      properties:
+        id: { $ref: "#/components/schemas/GlimpseIdValue" }
+        company_name: { type: string }
+        email: { type: string, format: email }
+        state: { $ref: "#/components/schemas/GlimpseState" }
+        hostname: { type: string }
+        created_at: { $ref: "#/components/schemas/Timestamp" }
+        notified_at: { oneOf: [ { $ref: "#/components/schemas/Timestamp" }, { type: "null" } ] }
+        activated_at: { oneOf: [ { $ref: "#/components/schemas/Timestamp" }, { type: "null" } ] }
+        expires_at: { oneOf: [ { $ref: "#/components/schemas/Timestamp" }, { type: "null" } ] }
+        delete_at: { oneOf: [ { $ref: "#/components/schemas/Timestamp" }, { type: "null" } ] }
+        extension_count: { type: integer, minimum: 0 }
+        last_extended_at: { oneOf: [ { $ref: "#/components/schemas/Timestamp" }, { type: "null" } ] }
+    GlimpseDetail:
+      allOf:
+        - $ref: "#/components/schemas/GlimpseSummary"
+        - type: object
+          required: [ui_repo, api_repo, feedback]
+          properties:
+            ui_repo: { type: string }
+            api_repo: { type: string }
+            d1_database_id: { type: [string, "null"] }
+            access_app_id: { type: [string, "null"] }
+            owner_name: { type: [string, "null"] }
+            phone: { type: [string, "null"] }
+            jobs:
+              type: array
+              items: { $ref: "#/components/schemas/ScheduledJob" }
+            feedback:
+              description: Fetched from portal-api at request time; never stored here.
+              type: object
+              required: [available, decisions, comments]
+              properties:
+                available: { type: boolean, description: false if portal-api was unreachable }
+                decisions:
+                  type: array
+                  items: { $ref: "#/components/schemas/DecisionLogEntry" }
+                comments:
+                  type: array
+                  items: { $ref: "#/components/schemas/Comment" }
+    DecisionLogEntry:
+      type: object
+      required: [action, occurred_at]
+      properties:
+        action: { type: string, enum: [APPROVED, DECLINED, DELAYED], description: srt DECISION_ACTION }
+        occurred_at: { $ref: "#/components/schemas/Timestamp" }
+        new_expires_at: { oneOf: [ { $ref: "#/components/schemas/Timestamp" }, { type: "null" } ] }
+    Comment:
+      type: object
+      required: [id, author, body, created_at]
+      properties:
+        id: { type: integer }
+        author: { type: string, enum: [PROSPECT, ED], description: srt AUTHOR }
+        body: { type: string }
+        created_at: { $ref: "#/components/schemas/Timestamp" }
+    GlimpseEvent:
+      type: object
+      required: [to_state, actor, occurred_at]
+      properties:
+        from_state: { oneOf: [ { $ref: "#/components/schemas/GlimpseState" }, { type: "null" } ] }
+        to_state: { $ref: "#/components/schemas/GlimpseState" }
+        actor: { type: string, enum: [ED, PROSPECT, CRON, SYSTEM], description: srt ACTOR }
+        occurred_at: { $ref: "#/components/schemas/Timestamp" }
+        detail: {}
+    ScheduledJob:
+      type: object
+      required: [id, glimpse_id, kind, run_at, cron_expression, status]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        glimpse_id: { $ref: "#/components/schemas/GlimpseIdValue" }
+        kind: { type: string, enum: [EXPIRE, DELETE], description: srt JOB_KIND }
+        run_at: { $ref: "#/components/schemas/Timestamp" }
+        cron_expression:
+          type: string
+          description: Stored for the database view; the UI shows run_at only.
+        status: { $ref: "#/components/schemas/JobStatus" }
+        ran_at: { oneOf: [ { $ref: "#/components/schemas/Timestamp" }, { type: "null" } ] }
+    Run:
+      type: object
+      required: [id, glimpse_id, kind, status, started_at, steps]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        glimpse_id: { $ref: "#/components/schemas/GlimpseIdValue" }
+        kind: { type: string, enum: [CREATE, REACTIVATE, EXTEND, EXPIRE, DELETE], description: srt RUN_KIND }
+        status: { type: string, enum: [RUNNING, SUCCEEDED, FAILED, CANCELLED], description: srt RUN_STATUS }
+        started_at: { $ref: "#/components/schemas/Timestamp" }
+        finished_at: { oneOf: [ { $ref: "#/components/schemas/Timestamp" }, { type: "null" } ] }
+        trace_id: { type: [string, "null"] }
+        error: { type: [string, "null"] }
+        steps:
+          type: array
+          items:
+            type: object
+            required: [seq, name, status]
+            properties:
+              seq: { type: integer }
+              name: { type: string, examples: [github.create_repo.ui, cloudflare.d1.create] }
+              status: { type: string, enum: [PENDING, RUNNING, SUCCEEDED, SKIPPED, FAILED], description: srt STEP_STATUS }
+              started_at: { oneOf: [ { $ref: "#/components/schemas/Timestamp" }, { type: "null" } ] }
+              finished_at: { oneOf: [ { $ref: "#/components/schemas/Timestamp" }, { type: "null" } ] }
+              trace_id: { type: [string, "null"] }
+
+x-service-bindings:
+  description: |
+    Worker-to-Worker RPC over Cloudflare Service Bindings. Not HTTP routes; not
+    reachable from the Internet. admin-api EXPOSES two methods (both called only
+    by portal-api) and CALLS two on portal-api (see portal-api.openapi.yaml).
+    Four methods in total are the only coupling between the two systems.
+  exposes:
+    extend:
+      called_by: portal-api
+      input:
+        glimpse_id: GlimpseIdValue
+      effect: |
+        Allowed when state in (PENDING, APPROVED, DECLINED, DELAYED, EXPIRED).
+        state = DELAYED; activated_at = now; expires_at = now + 7d;
+        delete_at = now + 30d; cancel PENDING EXPIRE/DELETE jobs and insert new
+        ones; extension_count += 1; last_extended_at = now. If the glimpse was
+        EXPIRED, re-add the prospect's email to the Access policy. Insert
+        glimpse_event (actor PROSPECT). Call portal-api.upsert_glimpse with the
+        new expires_at and active = true. Insert notification ED/extension_taken.
+      output:
+        state: GlimpseState
+        expires_at: Timestamp
+        delete_at: Timestamp
+      errors:
+        not_found: no such glimpse
+        not_extendable: state is PROVISIONING, FAILED, DRAFT, or DELETED
+    record_decision:
+      called_by: portal-api
+      input:
+        glimpse_id: GlimpseIdValue
+        action: APPROVED | DECLINED
+        occurred_at: Timestamp
+      effect: |
+        Allowed when state in (PENDING, APPROVED, DECLINED, DELAYED).
+        state = action; insert glimpse_event (actor PROSPECT). Clocks are not
+        changed. The decision text itself stays in the portal database.
+      output:
+        state: GlimpseState
+      errors:
+        not_found: no such glimpse
+        not_decidable: state is PROVISIONING, FAILED, DRAFT, EXPIRED, or DELETED
