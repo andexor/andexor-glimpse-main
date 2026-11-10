@@ -5,7 +5,7 @@
 # NOTE: If you have not done so already, run install-uv.sh first.
 
 # Install Spec Kit.
-uv tool install specify-cli --from git+https://github.com/github/spec-kit.git@v1.0.6
+uv tool install specify-cli --from git+https://github.com/github/spec-kit.git@v1.3.2
 
 # Initialize the project.
 specify init --here --force --non-interactive --script sh --integration claude

@@ -24,14 +24,14 @@ Access -> Access : email on policy? → send PIN\n(from noreply@notify.cloudflar
 Prospect -> Access : PIN
 Access --> Prospect : session cookie (7 days,\nshared across Access apps)
 Prospect -> UI : portal page
-UI -> PAPI : GET /api/me/glimpses\n(Cf-Access-Jwt-Assertion header)
+UI -> PAPI : GET /api/v1/me/glimpses\n(Cf-Access-Jwt-Assertion header)
 PAPI -> PAPI : verify JWT, read email claim
 PAPI -> PDB : SELECT prospect by email;\nSELECT glimpse WHERE prospect_id
 PAPI --> UI : [{ id, company, hostname,\nexpires_at, active, current_decision }]
 
 == Approve / Decline ==
 Prospect -> UI : Approve (confirm)
-UI -> PAPI : POST /api/glimpses/{id}/decision { action: APPROVED }
+UI -> PAPI : POST /api/v1/glimpses/{id}/decision { action: APPROVED }
 PAPI -> PDB : INSERT decision_log (APPROVED)
 PAPI -> AAPI : record_decision(glimpse_id, APPROVED)   [Service Binding]
 AAPI -> SDB : UPDATE glimpse state=APPROVED\nINSERT glimpse_event PENDING→APPROVED (actor=PROSPECT)
@@ -41,14 +41,14 @@ PAPI --> UI : 201 { action: APPROVED, occurred_at }
 
 == Comment ==
 Prospect -> UI : Add comment
-UI -> PAPI : POST /api/glimpses/{id}/comments { body }
+UI -> PAPI : POST /api/v1/glimpses/{id}/comments { body }
 PAPI -> PDB : INSERT comment
 PAPI --> Ed : email + SMS (stub)
 PAPI --> UI : 201
 
 == "I need more time" (self-service, no approval) ==
 Prospect -> UI : I need more time
-UI -> PAPI : POST /api/glimpses/{id}/extend
+UI -> PAPI : POST /api/v1/glimpses/{id}/extend
 PAPI -> AAPI : extend(glimpse_id)   [Service Binding]
 AAPI -> SDB : state=DELAYED; activated_at=now, expires_at=+7d, delete_at=+30d\ncancel pending jobs; INSERT new EXPIRE+DELETE\nextension_count+1; INSERT glimpse_event (actor=PROSPECT)
 AAPI -> CF : if EXPIRED: re-add prospect to the Access policy
@@ -61,7 +61,7 @@ PAPI --> UI : 200 { expires_at }
 UI --> Prospect : new expiry shown
 
 == Ed views feedback in admin-ui (on demand, nothing stored) ==
-Ed -> AAPI : GET /api/glimpses/{id}
+Ed -> AAPI : GET /api/v1/glimpses/{id}
 AAPI -> SDB : SELECT glimpse
 AAPI -> PAPI : get_feedback(glimpse_id)   [Service Binding]
 PAPI -> PDB : SELECT decision_log, comment

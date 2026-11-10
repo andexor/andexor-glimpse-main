@@ -31,7 +31,7 @@ paths:
   /health:
     get:
       tags: [health]
-      summary: Liveness and database reachability
+      summary: Liveness only. Unversioned. Makes no external calls and reports on none.
       security: []
       responses:
         "200":
@@ -40,12 +40,11 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [status, database]
+                required: [status]
                 properties:
                   status: { type: string, enum: [ok] }
-                  database: { type: string, enum: [ok, error] }
 
-  /me:
+  /v1/me:
     get:
       tags: [me]
       summary: The signed-in prospect
@@ -58,7 +57,7 @@ paths:
         "403":
           description: Email passed Access but no prospect record exists (should not happen; alert Ed)
 
-  /me/glimpses:
+  /v1/me/glimpses:
     get:
       tags: [glimpses]
       summary: The prospect's glimpses with current decision and expiry
@@ -71,7 +70,7 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/PortalGlimpse" }
 
-  /glimpses/{glimpse_id}:
+  /v1/glimpses/{glimpse_id}:
     parameters: [ { $ref: "#/components/parameters/GlimpseId" } ]
     get:
       tags: [glimpses]
@@ -84,7 +83,7 @@ paths:
               schema: { $ref: "#/components/schemas/PortalGlimpseDetail" }
         "404": { $ref: "#/components/responses/NotFound" }
 
-  /glimpses/{glimpse_id}/decision:
+  /v1/glimpses/{glimpse_id}/decision:
     post:
       tags: [glimpses]
       summary: Approve or decline (appends to decision_log; calls admin-api.record_decision; alerts Ed)
@@ -108,7 +107,7 @@ paths:
         "409":
           description: Glimpse is not active (EXPIRED or deleted)
 
-  /glimpses/{glimpse_id}/comments:
+  /v1/glimpses/{glimpse_id}/comments:
     parameters: [ { $ref: "#/components/parameters/GlimpseId" } ]
     get:
       tags: [glimpses]
@@ -141,7 +140,7 @@ paths:
               schema: { $ref: "#/components/schemas/Comment" }
         "404": { $ref: "#/components/responses/NotFound" }
 
-  /glimpses/{glimpse_id}/extend:
+  /v1/glimpses/{glimpse_id}/extend:
     post:
       tags: [glimpses]
       summary: '"I need more time" — self-service extension, no approval'

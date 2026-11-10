@@ -32,7 +32,7 @@ paths:
   /health:
     get:
       tags: [health]
-      summary: Liveness and database reachability
+      summary: Liveness only. Unversioned. Makes no external calls and reports on none.
       security: []
       responses:
         "200":
@@ -41,7 +41,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Health" }
 
-  /glimpses:
+  /v1/glimpses:
     get:
       tags: [glimpses]
       summary: List glimpses for the dashboard
@@ -94,7 +94,7 @@ paths:
         "409":
           description: A non-deleted glimpse already exists for this company and email
 
-  /glimpses/{glimpse_id}:
+  /v1/glimpses/{glimpse_id}:
     parameters:
       - $ref: "#/components/parameters/GlimpseId"
     get:
@@ -108,7 +108,7 @@ paths:
               schema: { $ref: "#/components/schemas/GlimpseDetail" }
         "404": { $ref: "#/components/responses/NotFound" }
 
-  /glimpses/{glimpse_id}/notify:
+  /v1/glimpses/{glimpse_id}/notify:
     post:
       tags: [glimpses]
       summary: DRAFT → PENDING. Adds prospect to the Access policy, schedules EXPIRE/DELETE, sends invite (stub).
@@ -122,7 +122,7 @@ paths:
         "409":
           description: Glimpse is not in DRAFT
 
-  /glimpses/{glimpse_id}/reactivate:
+  /v1/glimpses/{glimpse_id}/reactivate:
     post:
       tags: [glimpses]
       summary: EXPIRED → PENDING. Resets both clocks from now.
@@ -136,7 +136,7 @@ paths:
         "409":
           description: Glimpse is not EXPIRED
 
-  /glimpses/{glimpse_id}/delete:
+  /v1/glimpses/{glimpse_id}/delete:
     post:
       tags: [glimpses]
       summary: Request deletion now (allowed from APPROVED, DECLINED, DELAYED, EXPIRED)
@@ -150,7 +150,7 @@ paths:
         "409":
           description: State does not permit deletion
 
-  /glimpses/{glimpse_id}/recreate:
+  /v1/glimpses/{glimpse_id}/recreate:
     post:
       tags: [glimpses]
       summary: Create a new glimpse for the same prospect (old one is left in its state)
@@ -162,7 +162,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/RunAccepted" }
 
-  /glimpses/{glimpse_id}/events:
+  /v1/glimpses/{glimpse_id}/events:
     get:
       tags: [glimpses]
       summary: Audit trail of state transitions
@@ -176,7 +176,7 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/GlimpseEvent" }
 
-  /runs/{run_id}:
+  /v1/runs/{run_id}:
     get:
       tags: [runs]
       summary: Provisioning run with its steps
@@ -201,7 +201,7 @@ paths:
         "409":
           description: Run is not FAILED
 
-  /runs/{run_id}/events:
+  /v1/runs/{run_id}/events:
     get:
       tags: [runs]
       summary: Server-Sent Events stream of step progress
@@ -228,7 +228,7 @@ paths:
                     event: run
                     data: {"status":"SUCCEEDED","glimpse_id":"q7mx2k9pbd4ht6wz3nra","state":"DRAFT"}
 
-  /jobs:
+  /v1/jobs:
     get:
       tags: [jobs]
       summary: Scheduled jobs (dates for the UI; cron expression included for the database view)
@@ -302,10 +302,9 @@ components:
       description: srt domain JOB_STATUS
     Health:
       type: object
-      required: [status, database]
+      required: [status]
       properties:
         status: { type: string, enum: [ok] }
-        database: { type: string, enum: [ok, error] }
         version: { type: string }
     Error:
       type: object

@@ -42,7 +42,7 @@ end
 API --> Cron : done
 
 == Reactivate from admin-ui (Ed) ==
-Ed -> API : POST /api/glimpses/{id}/reactivate
+Ed -> API : POST /api/v1/glimpses/{id}/reactivate
 API -> DB : cancel pending delete job;\nactivated_at=now, expires_at=+7d, delete_at=+30d;\nINSERT new EXPIRE + DELETE jobs; state=PENDING\nINSERT glimpse_event EXPIRED→PENDING (actor=ED)
 API -> CF : re-add prospect email to the Access policy
 API -> Portal : upsert_glimpse(expires_at, active=true)

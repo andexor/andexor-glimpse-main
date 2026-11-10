@@ -15,11 +15,11 @@ participant "Cloudflare API" as CF
 participant "portal-api" as Portal
 
 Ed -> UI : Create glimpse\n(company, email, [owner, phone])
-UI -> API : POST /glimpses
+UI -> API : POST /api/v1/glimpses
 API -> API : generate id (20-char base32, lowercase)
 API -> DB : INSERT prospect (upsert by email)\nINSERT glimpse state=PROVISIONING\nINSERT provisioning_run kind=create
 API --> UI : 202 Accepted { glimpse_id, run_id }
-UI -> API : GET /runs/{run_id}/events  (SSE)
+UI -> API : GET /api/v1/runs/{run_id}/events  (SSE)
 activate UI
 
 group Steps are idempotent: each checks for its resource before creating it
@@ -43,7 +43,7 @@ UI --> Ed : Glimpse is in DRAFT;\nreplace Hello World, then Notify
 
 == Later: Ed clicks "Notify prospect" ==
 Ed -> UI : Notify prospect
-UI -> API : POST /glimpses/{id}/notify
+UI -> API : POST /api/v1/glimpses/{id}/notify
 API -> CF : add prospect email to the Access policy
 API -> DB : state=PENDING, notified_at, activated_at,\nexpires_at=+7d, delete_at=+30d\nINSERT scheduled_job EXPIRE, DELETE\nINSERT glimpse_event DRAFT→PENDING
 API -> Portal : upsert_glimpse(id, company, email,\nhostname, expires_at, active=true)
